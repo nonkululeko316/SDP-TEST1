@@ -1,0 +1,10 @@
+# Runtime data: cloned/extracted repos, uploads, databases
+data/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Node (frontend, added in a later chunk)
+node_modules/
