@@ -3,9 +3,11 @@
 Run it with:  uvicorn rat.main:app --reload --port 8000
 """
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from . import db
 from .api import authors, metrics, repos
@@ -39,7 +41,20 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/", tags=["meta"])
-def root() -> dict:
-    """Friendly landing response with links to the docs."""
-    return {"name": "Repo Analysis Tool", "docs": "/docs", "health": "/api/health"}
+# Serve the built React dashboard (frontend/dist) when it exists, so the
+# whole tool runs from this single server. Rebuild it with:
+#   cd frontend && npm install && npm run build
+_dashboard = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if (_dashboard / "index.html").is_file():
+    app.mount("/", StaticFiles(directory=_dashboard, html=True), name="dashboard")
+else:
+
+    @app.get("/", tags=["meta"])
+    def root() -> dict:
+        """Friendly landing response until the dashboard is built."""
+        return {
+            "name": "Repo Analysis Tool",
+            "docs": "/docs",
+            "health": "/api/health",
+            "dashboard": "not built yet - run: cd frontend && npm install && npm run build",
+        }
