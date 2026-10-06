@@ -50,6 +50,13 @@ CREATE TABLE IF NOT EXISTS dir_changes (
 );
 CREATE INDEX IF NOT EXISTS idx_dir_changes_path ON dir_changes (repo_id, path);
 CREATE INDEX IF NOT EXISTS idx_dir_changes_commit ON dir_changes (repo_id, commit_hash);
+
+CREATE TABLE IF NOT EXISTS commit_graph (
+    repo_id INTEGER NOT NULL,
+    hash    TEXT NOT NULL,
+    parents TEXT NOT NULL,           -- space-separated parents, '' for the root commit
+    PRIMARY KEY (repo_id, hash)
+);
 """
 
 

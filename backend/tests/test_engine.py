@@ -14,84 +14,10 @@ The fixture repo exercises, in order:
 Expected totals: 8 commits, 7 file rows, +8 / -3 lines, and directory
 rollups that agree with the per-file rows.
 """
-import subprocess
-from pathlib import Path
-
 from rat import db
 from rat.analysis.engine import analyse_repo
 from rat.analysis.store import ancestors
-
-
-def git(repo: Path, *args: str, name: str = "Alice", email: str = "alice@example.com") -> str:
-    """Run one git command in the fixture repo with a fixed identity."""
-    cmd = [
-        "git", "-C", str(repo),
-        "-c", f"user.name={name}", "-c", f"user.email={email}",
-        "-c", "commit.gpgsign=false",
-        *args,
-    ]
-    return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
-
-
-def commit(repo: Path, message: str, *, name: str = "Alice", email: str = "alice@example.com") -> str:
-    """Stage everything, commit, and return the new commit hash."""
-    git(repo, "add", "-A", name=name, email=email)
-    git(repo, "commit", "-m", message, name=name, email=email)
-    return git(repo, "rev-parse", "HEAD", name=name, email=email)
-
-
-def build_repo(root: Path) -> dict[str, str]:
-    """Create the scenario repository under `root`; return commit hashes by label."""
-    repo = root / "sample"
-    repo.mkdir()
-    git(repo, "init", "-b", "main")
-    hashes: dict[str, str] = {}
-
-    # c1: two new files, five added lines in total.
-    (repo / "README.md").write_text("hello\nworld\n")
-    (repo / "src").mkdir()
-    (repo / "src" / "app.py").write_text("a\nb\nc\n")
-    hashes["c1"] = commit(repo, "initial commit")
-
-    # c2: one line added to README.md.
-    with (repo / "README.md").open("a") as handle:
-        handle.write("more\n")
-    hashes["c2"] = commit(repo, "expand readme")
-
-    # c3: rename + one added line (must be one rename entry, not delete+add).
-    git(repo, "mv", "src/app.py", "src/main.py", name="Bob", email="bob@example.com")
-    with (repo / "src" / "main.py").open("a") as handle:
-        handle.write("d\n")
-    hashes["c3"] = commit(repo, "rename app to main", name="Bob", email="bob@example.com")
-
-    # c4: pure rename; content unchanged.
-    git(repo, "mv", "README.md", "README.rst", name="Bob", email="bob@example.com")
-    hashes["c4"] = commit(repo, "rename readme", name="Bob", email="bob@example.com")
-
-    # c5: deletion of the three-line README.rst.
-    git(repo, "rm", "README.rst", name="Bob", email="bob@example.com")
-    hashes["c5"] = commit(repo, "drop readme", name="Bob", email="bob@example.com")
-
-    # c6: binary file.
-    (repo / "blob.bin").write_bytes(bytes(range(256)) * 4)
-    hashes["c6"] = commit(repo, "add binary")
-
-    # c7: empty commit.
-    git(repo, "commit", "--allow-empty", "-m", "empty commit")
-    hashes["c7"] = git(repo, "rev-parse", "HEAD")
-
-    # c8 on a side branch, then merged back in c9.
-    git(repo, "checkout", "-b", "feature", name="Bob", email="bob@example.com")
-    with (repo / "src" / "main.py").open("a") as handle:
-        handle.write("e\n")
-    hashes["c8"] = commit(repo, "feature work", name="Bob", email="bob@example.com")
-
-    git(repo, "checkout", "main", name="Bob", email="bob@example.com")
-    git(repo, "merge", "--no-ff", "-m", "merge feature", "feature",
-        name="Bob", email="bob@example.com")
-    hashes["merge"] = git(repo, "rev-parse", "HEAD")
-
-    return hashes
+from repo_builder import build_repo, git
 
 
 def test_engine_scenario(rat_env):
@@ -183,6 +109,23 @@ def test_engine_scenario(rat_env):
         ).fetchone()[0]
         assert n_bob == 4
 
+        # The full ancestry graph is stored too (merge commits included),
+        # so "as of commit X" walks never stop at a merge.
+        n_graph = conn.execute(
+            "SELECT COUNT(*) FROM commit_graph WHERE repo_id = ?", (repo_id,)
+        ).fetchone()[0]
+        assert n_graph == 9
+        merge_parents = conn.execute(
+            "SELECT parents FROM commit_graph WHERE repo_id = ? AND hash = ?",
+            (repo_id, hashes["merge"]),
+        ).fetchone()[0]
+        assert sorted(merge_parents.split()) == sorted([hashes["c7"], hashes["c8"]])
+        root_parents = conn.execute(
+            "SELECT parents FROM commit_graph WHERE repo_id = ? AND hash = ?",
+            (repo_id, hashes["c1"]),
+        ).fetchone()[0]
+        assert root_parents == ""
+
     # Re-analysis replaces the old rows instead of duplicating them.
     analyse_repo(repo_id, repo_path)
     with db.connection() as conn:
@@ -192,7 +135,10 @@ def test_engine_scenario(rat_env):
         n_files = conn.execute(
             "SELECT COUNT(*) FROM file_changes WHERE repo_id = ?", (repo_id,)
         ).fetchone()[0]
-    assert (n_commits, n_files) == (8, 7)
+        n_graph = conn.execute(
+            "SELECT COUNT(*) FROM commit_graph WHERE repo_id = ?", (repo_id,)
+        ).fetchone()[0]
+    assert (n_commits, n_files, n_graph) == (8, 7, 9)
 
 
 def test_ancestors():

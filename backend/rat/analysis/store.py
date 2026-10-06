@@ -4,6 +4,7 @@ Rows are the raw material for every metric in the spec:
 - `commits`      one row per non-merge commit (metadata)
 - `file_changes` one row per changed file per commit (added/removed lines)
 - `dir_changes`  per directory per commit, aggregated over its whole subtree
+- `commit_graph` full ancestry edges (merge commits included) for "as of" queries
 
 All commit-set and author metrics are later computed by summing/filtering
 these rows in SQL, so no recomputation happens at query time.
@@ -32,6 +33,7 @@ class MetricsWriter:
         self._commits: list[tuple] = []
         self._files: list[tuple] = []
         self._dirs: list[tuple] = []
+        self._graph: list[tuple] = []
 
     def add(self, commit: CommitDiff) -> None:
         """Record one commit and roll its file changes up into directories."""
@@ -61,9 +63,15 @@ class MetricsWriter:
         if len(self._files) >= BATCH_SIZE:
             self.flush()
 
+    def add_graph(self, hash_: str, parents: str) -> None:
+        """Record one node of the full ancestry graph (merges included)."""
+        self._graph.append((self.repo_id, hash_, parents))
+        if len(self._graph) >= BATCH_SIZE:
+            self.flush()
+
     def flush(self) -> None:
         """Write pending rows to the database and clear the buffers."""
-        if not (self._commits or self._files or self._dirs):
+        if not (self._commits or self._files or self._dirs or self._graph):
             return
         with connection() as conn:
             conn.executemany(
@@ -82,4 +90,8 @@ class MetricsWriter:
                 " VALUES (?, ?, ?, ?, ?)",
                 self._dirs,
             )
-        self._commits, self._files, self._dirs = [], [], []
+            conn.executemany(
+                "INSERT INTO commit_graph (repo_id, hash, parents) VALUES (?, ?, ?)",
+                self._graph,
+            )
+        self._commits, self._files, self._dirs, self._graph = [], [], [], []

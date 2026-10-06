@@ -17,6 +17,10 @@ Notes:
   *new* path is recorded (the spec attributes changes to the new path).
 - The single LF after each commit header glues onto the next token and is
   stripped during parsing.
+
+`stream_graph` additionally reads the *full* ancestry (via `git rev-list
+--parents`), merge commits included: a measured commit may have a merge as
+its parent, so "as of commit X" walks would stop early without it.
 """
 import re
 import subprocess
@@ -156,3 +160,21 @@ def _count(raw: bytes) -> Optional[int]:
 
 def _text(raw: bytes) -> str:
     return raw.decode("utf-8", "replace")
+
+
+def stream_graph(repo_root: Path) -> Iterator[tuple[str, str]]:
+    """Yield (hash, parents) for every commit reachable from HEAD.
+
+    Merge commits are included: they are never measured, but the
+    "as of commit X" filter needs complete ancestry edges to walk through.
+    """
+    cmd = ["git", "-C", str(repo_root), "rev-list", "--parents", "HEAD"]
+    out = subprocess.run(cmd, capture_output=True, text=True)
+    if out.returncode != 0:
+        raise GitLogError(
+            f"git rev-list exited with status {out.returncode}: {out.stderr.strip()[-500:]}"
+        )
+    for line in out.stdout.splitlines():
+        fields = line.split()
+        if fields:
+            yield fields[0], " ".join(fields[1:])
