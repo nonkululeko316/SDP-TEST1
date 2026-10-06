@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile
 
 from .. import config, db
+from ..analysis.engine import analyse_repo
 from ..ingest.clone import ingest_clone
 from ..ingest.jobs import run_repo_job
 from ..ingest.unzip import ingest_zip
@@ -57,7 +58,8 @@ async def upload_zip(file: UploadFile) -> dict:
 
     def task() -> None:
         root = ingest_zip(tmp_zip, _repo_dir(repo_id))
-        db.update_repo(repo_id, local_path=str(root))
+        db.update_repo(repo_id, local_path=str(root), status="analysing")
+        analyse_repo(repo_id, root)
 
     run_repo_job(repo_id, task)
     return db.get_repo(repo_id)
@@ -76,7 +78,23 @@ def clone_repository(request: CloneRequest) -> dict:
 
     def task() -> None:
         root = ingest_clone(url, _repo_dir(repo_id))
-        db.update_repo(repo_id, local_path=str(root))
+        db.update_repo(repo_id, local_path=str(root), status="analysing")
+        analyse_repo(repo_id, root)
 
     run_repo_job(repo_id, task)
+    return db.get_repo(repo_id)
+
+
+@router.post("/{repo_id}/analyse", response_model=RepoOut, status_code=202)
+def analyse_repository(repo_id: int) -> dict:
+    """(Re-)run the metric analysis for a repository that is already ingested."""
+    repo = _require_repo(repo_id)
+    local_path = repo["local_path"]
+    if not local_path:
+        raise HTTPException(status_code=409, detail="Repository has not been ingested yet")
+    root = Path(local_path)
+    if not (root / ".git").exists():
+        raise HTTPException(status_code=409, detail=f"No .git directory found at {local_path}")
+
+    run_repo_job(repo_id, lambda: analyse_repo(repo_id, root), start_status="analysing")
     return db.get_repo(repo_id)

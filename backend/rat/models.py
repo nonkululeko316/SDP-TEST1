@@ -10,7 +10,7 @@ class RepoOut(BaseModel):
     source_type: str    # "zip" or "url"
     source_ref: str     # original filename or URL
     local_path: str | None
-    status: str         # queued | ingesting | ingested | error
+    status: str         # queued | ingesting | analysing | ready | error
     message: str
     created_at: str
 
