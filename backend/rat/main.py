@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import db
-from .api import metrics, repos
+from .api import authors, metrics, repos
 
 
 @asynccontextmanager
@@ -30,6 +30,7 @@ app.add_middleware(
 
 app.include_router(repos.router)
 app.include_router(metrics.router)
+app.include_router(authors.router)
 
 
 @app.get("/api/health", tags=["meta"])

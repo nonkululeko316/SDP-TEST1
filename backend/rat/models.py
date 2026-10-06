@@ -131,12 +131,36 @@ class AuthorItemOut(BaseModel):
     removed: int
     first_ts: int
     last_ts: int
+    identities: list[str] = []          # raw emails merged into this identity
 
 
 class AuthorsOut(BaseModel):
     repo_id: int
     total: int
     items: list[AuthorItemOut]
+
+
+class AuthorMergeRequest(BaseModel):
+    """Body of POST /api/repos/{id}/author-merges."""
+
+    source_email: str                   # identity that disappears
+    target_email: str                   # identity it merges into
+
+
+class AuthorMergeOut(BaseModel):
+    """One manual author merge."""
+
+    id: int
+    repo_id: int
+    source_email: str
+    target_email: str
+    created_at: str
+
+
+class AuthorMergesOut(BaseModel):
+    repo_id: int
+    total: int
+    items: list[AuthorMergeOut]
 
 
 class CommitSetRequest(BaseModel):

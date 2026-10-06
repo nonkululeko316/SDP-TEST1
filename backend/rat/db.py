@@ -21,12 +21,14 @@ CREATE TABLE IF NOT EXISTS repositories (
 
 _METRICS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS commits (
-    repo_id      INTEGER NOT NULL,
-    hash         TEXT NOT NULL,
-    parents      TEXT NOT NULL,      -- space-separated parent hashes, '' for root commits
-    author_name  TEXT NOT NULL,
-    author_email TEXT NOT NULL,
-    committer_ts INTEGER NOT NULL,   -- unix timestamp of the committer date
+    repo_id          INTEGER NOT NULL,
+    hash             TEXT NOT NULL,
+    parents          TEXT NOT NULL,      -- space-separated parent hashes, '' for root commits
+    author_name      TEXT NOT NULL,      -- resolved identity (mailmap + manual merges)
+    author_email     TEXT NOT NULL,      -- resolved identity (mailmap + manual merges)
+    raw_author_name  TEXT,               -- exactly as git reported it
+    raw_author_email TEXT,
+    committer_ts     INTEGER NOT NULL,   -- unix timestamp of the committer date
     PRIMARY KEY (repo_id, hash)
 );
 CREATE INDEX IF NOT EXISTS idx_commits_time ON commits (repo_id, committer_ts);
@@ -57,7 +59,34 @@ CREATE TABLE IF NOT EXISTS commit_graph (
     parents TEXT NOT NULL,           -- space-separated parents, '' for the root commit
     PRIMARY KEY (repo_id, hash)
 );
+
+CREATE TABLE IF NOT EXISTS author_merges (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id      INTEGER NOT NULL,
+    source_email TEXT NOT NULL,      -- identity that disappears (resolved email)
+    target_email TEXT NOT NULL,      -- identity it merges into (resolved email)
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_author_merges_repo ON author_merges (repo_id);
 """
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Upgrade databases created before later schema versions.
+
+    The raw author columns were added in Chunk 4; existing databases get
+    them back-filled (raw = resolved) by the next author resolution pass.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(commits)")}
+    if not columns:
+        return
+    if "raw_author_name" not in columns:
+        conn.execute("ALTER TABLE commits ADD COLUMN raw_author_name TEXT")
+    if "raw_author_email" not in columns:
+        conn.execute("ALTER TABLE commits ADD COLUMN raw_author_email TEXT")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_commits_raw ON commits (repo_id, raw_author_email)"
+    )
 
 
 @contextmanager
@@ -79,6 +108,7 @@ def init_db() -> None:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(_SCHEMA)
         conn.executescript(_METRICS_SCHEMA)
+        _migrate(conn)
 
 
 def create_repo(name: str, source_type: str, source_ref: str) -> dict:

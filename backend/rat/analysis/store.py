@@ -40,7 +40,10 @@ class MetricsWriter:
         self.n_commits += 1
         self._commits.append((
             self.repo_id, commit.hash, commit.parents,
-            commit.author_name, commit.author_email, commit.committer_ts,
+            commit.author_name, commit.author_email,
+            # raw duplicate: resolve_authors() rewrites the resolved columns
+            commit.author_name, commit.author_email,
+            commit.committer_ts,
         ))
 
         by_path: dict[str, list[int]] = {}
@@ -76,8 +79,9 @@ class MetricsWriter:
         with connection() as conn:
             conn.executemany(
                 "INSERT INTO commits"
-                " (repo_id, hash, parents, author_name, author_email, committer_ts)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
+                " (repo_id, hash, parents, author_name, author_email,"
+                "  raw_author_name, raw_author_email, committer_ts)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 self._commits,
             )
             conn.executemany(

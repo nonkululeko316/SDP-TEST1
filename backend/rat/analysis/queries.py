@@ -118,8 +118,13 @@ def _resolve(conn, repo_id: int, filters: Filters) -> Resolved:
     params: list = []
 
     if filters.author:
-        parts.append("(author_email = ? OR author_name = ?)")
-        params += [filters.author, filters.author]
+        # Match the resolved identity or any raw identity merged into it,
+        # so filtering by a legacy email still finds its commits.
+        parts.append(
+            "(author_email = ? OR author_name = ?"
+            " OR raw_author_email = ? OR raw_author_name = ?)"
+        )
+        params += [filters.author] * 4
     if filters.from_ts is not None:
         parts.append("committer_ts >= ?")
         params.append(filters.from_ts)
@@ -391,7 +396,12 @@ def list_commits(repo_id: int, limit: int, offset: int) -> dict:
 
 
 def list_authors(repo_id: int, limit: int) -> dict:
-    """All authors with their totals over the whole history (author filter UI)."""
+    """All authors with their totals over the whole history (author filter UI).
+
+    `identities` lists the raw emails that were merged into each resolved
+    author (mailmap or manual), so the dashboard can show why a row has
+    more commits than its own email suggests.
+    """
     with db.connection() as conn:
         total = conn.execute(
             "SELECT COUNT(DISTINCT author_email) FROM commits WHERE repo_id = ?",
@@ -412,11 +422,23 @@ def list_authors(repo_id: int, limit: int) -> dict:
             " ORDER BY commits DESC, email LIMIT ?",
             (repo_id, limit),
         ).fetchall()
+        ident_rows = conn.execute(
+            "SELECT author_email, raw_author_email FROM commits"
+            " WHERE repo_id = ? AND raw_author_email IS NOT NULL"
+            "   AND raw_author_email != author_email"
+            " GROUP BY author_email, raw_author_email",
+            (repo_id,),
+        ).fetchall()
         names = _latest_names(conn, repo_id)
+
+    identities: dict[str, list[str]] = {}
+    for resolved, raw in ident_rows:
+        identities.setdefault(resolved, []).append(raw)
 
     items = []
     for row in rows:
         item = dict(row)
         item["name"] = names.get(row["email"], row["email"])
+        item["identities"] = sorted(identities.get(row["email"], []))
         items.append(item)
     return {"repo_id": repo_id, "total": total, "items": items}
